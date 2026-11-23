@@ -89,13 +89,9 @@ git remote add origin https://github.com/<your-username>/<your-repo>.git
 git push -u origin main
 ```
 
-If the repo already has your console code, copy these files into it (or put them in a `web/` folder) and push. After pushing, open the repo's **Actions** tab: the *Build and smoke test* workflow builds the app, starts it, and exercises create-account, login, deposit and balance. A green check means the app is working.
 
-## Possible next steps
 
-Session expiry, rate-limiting PIN attempts, unit tests with Testcontainers, Docker Compose with MySQL.
-
-## Deploy online (Render, free tier)
+## Deploy online 
 
 1. Push this project to your public GitHub repo (see above).
 2. On <https://render.com> choose **New → Web Service**, connect the repo, and select **Docker** as the runtime (the included `Dockerfile` is used automatically).
