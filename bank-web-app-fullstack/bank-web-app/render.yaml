@@ -1,8 +1,0 @@
-# Optional Render Blueprint. Runs the app with the embedded H2 database (data resets on restart).
-# For permanent data, add a hosted MySQL and set these in the Render dashboard:
-#   SPRING_PROFILES_ACTIVE=mysql, DB_URL, DB_USER, DB_PASSWORD
-services:
-  - type: web
-    name: bank-web-app
-    runtime: docker
-    plan: free
