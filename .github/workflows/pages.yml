@@ -23,18 +23,84 @@ jobs:
       - name: Build static demo site
         run: |
           set -euo pipefail
-          INDEX=$(find . -path '*/src/main/resources/static/index.html' -not -path './node_modules/*' | head -n 1)
-          if [ -z "$INDEX" ]; then echo "::error::Could not find src/main/resources/static/index.html"; exit 1; fi
-          STATIC_DIR=$(dirname "$INDEX")
-          echo "Using $STATIC_DIR"
-
+          INDEX=$(find . -path '*/src/main/resources/static/index.html' | head -n 1)
+          if [ -z "$INDEX" ]; then echo "::error::index.html not found"; exit 1; fi
           mkdir _site
-          cp -r "$STATIC_DIR"/. _site/
-          cp pages-demo/demo-api.js _site/demo-api.js
+          cp -r "$(dirname "$INDEX")"/. _site/
           sed -i -E 's#(href|src)="/([^"/][^"]*)"#\1="\2"#g; s#href="/"#href="./"#g' _site/index.html
           sed -i 's#<script src="app.js"></script>#<script src="demo-api.js"></script><script src="app.js"></script>#' _site/index.html
-          grep -q 'src="demo-api.js"' _site/index.html || { echo "::error::could not inject demo-api.js"; exit 1; }
+          grep -q 'src="demo-api.js"' _site/index.html
           touch _site/.nojekyll
+          cat > _site/demo-api.js <<'EOF'
+          (function () {
+            var KEY = 'bank_demo_db_v2', db;
+            function now() { var d = new Date(), p = function (n) { return String(n).padStart(2, '0'); };
+              return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + 'T' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds()); }
+            try { db = JSON.parse(localStorage.getItem(KEY)); } catch (e) {}
+            if (!db) { var t = now(); db = { nextAcc: 3, nextTx: 3, sessions: {},
+              acc: { 1: { id: 1, name: 'Demo User', pin: '1234', c: 500000 }, 2: { id: 2, name: 'Friend Account', pin: '4321', c: 100000 } },
+              tx: [{ id: 1, a: 1, type: 'DEPOSIT', c: 500000, d: 'Opening deposit', t: t }, { id: 2, a: 2, type: 'DEPOSIT', c: 100000, d: 'Opening deposit', t: t }] }; }
+            function save() { try { localStorage.setItem(KEY, JSON.stringify(db)); } catch (e) {} }
+            function E(m, s) { var e = new Error(m); e.status = s || 400; return e; }
+            function cents(a) {
+              if (typeof a !== 'number' || isNaN(a) || a <= 0) throw E('Amount must be greater than zero.');
+              if (Math.abs(a * 100 - Math.round(a * 100)) > 1e-6) throw E('Amount can have at most 2 decimal places.');
+              if (a > 9999999999.99) throw E('Amount is too large.');
+              return Math.round(a * 100);
+            }
+            function log(a, type, c, d) { db.tx.push({ id: db.nextTx++, a: a, type: type, c: c, d: d, t: now() }); }
+            function me(h) { var x = (h && h.Authorization) || '', id = x.indexOf('Bearer ') === 0 ? db.sessions[x.slice(7)] : null;
+              if (!id || !db.acc[id]) throw E('Please log in again.', 401); return db.acc[id]; }
+            var plain = function (c) { return (c / 100).toFixed(2); };
+            var routes = {
+              'POST /api/accounts': function (r) { var b = r.body, n = String(b.holderName || '').trim();
+                if (!n || n.length > 100) throw E('Account holder name is required (max 100 characters).');
+                if (typeof b.pin !== 'string' || !/^\d{4}$/.test(b.pin)) throw E('PIN must be exactly 4 digits.');
+                var c = 0; if (b.initialDeposit) { if (b.initialDeposit < 0) throw E('Initial deposit cannot be negative.'); c = cents(b.initialDeposit); }
+                var id = db.nextAcc++; db.acc[id] = { id: id, name: n, pin: b.pin, c: c }; if (c) log(id, 'DEPOSIT', c, 'Opening deposit');
+                return [201, { accountId: id, message: 'Account created. Your account number is ' + id }]; },
+              'POST /api/login': function (r) { var a = db.acc[r.body.accountId];
+                if (!a || a.pin !== r.body.pin) throw E('Invalid account number or PIN.');
+                var tk = 'demo-' + Math.random().toString(36).slice(2) + Date.now().toString(36); db.sessions[tk] = a.id;
+                return [200, { token: tk, accountId: a.id, holderName: a.name }]; },
+              'POST /api/logout': function (r) { var x = (r.headers && r.headers.Authorization) || ''; delete db.sessions[x.slice(7)]; return [200, { message: 'Logged out.' }]; },
+              'GET /api/me': function (r) { var a = me(r.headers); return [200, { accountId: a.id, holderName: a.name, balance: a.c / 100 }]; },
+              'POST /api/me/deposit': function (r) { var a = me(r.headers), c = cents(r.body.amount); a.c += c; log(a.id, 'DEPOSIT', c, 'Cash deposit');
+                return [200, { balance: a.c / 100, message: 'Deposit successful.' }]; },
+              'POST /api/me/withdraw': function (r) { var a = me(r.headers), c = cents(r.body.amount);
+                if (a.c < c) throw E('Insufficient funds. Available balance: ' + plain(a.c));
+                a.c -= c; log(a.id, 'WITHDRAWAL', c, 'Cash withdrawal'); return [200, { balance: a.c / 100, message: 'Withdrawal successful.' }]; },
+              'POST /api/me/transfer': function (r) { var f = me(r.headers), id = r.body.toAccountId;
+                if (!id) throw E('Recipient account number is required.');
+                if (f.id === Number(id)) throw E('You cannot transfer money to your own account.');
+                var c = cents(r.body.amount), to = db.acc[id];
+                if (!to) throw E('Recipient account #' + id + ' does not exist.');
+                if (f.c < c) throw E('Insufficient funds. Available balance: ' + plain(f.c));
+                f.c -= c; to.c += c; log(f.id, 'TRANSFER_OUT', c, 'Transfer to account ' + to.id); log(to.id, 'TRANSFER_IN', c, 'Transfer from account ' + f.id);
+                return [200, { balance: f.c / 100, message: 'Transfer successful.' }]; },
+              'GET /api/me/transactions': function (r) { var a = me(r.headers);
+                return [200, db.tx.filter(function (x) { return x.a === a.id; }).sort(function (x, y) { return y.id - x.id; })
+                  .map(function (x) { return { transactionId: x.id, type: x.type, amount: x.c / 100, description: x.d, createdAt: x.t }; })]; }
+            };
+            var realFetch = window.fetch.bind(window);
+            window.fetch = function (url, o) {
+              var m = /\/api(\/[^?#]*)?(?:[?#].*)?$/.exec(String(url)); if (!m) return realFetch(url, o);
+              o = o || {}; var h = routes[(o.method || 'GET').toUpperCase() + ' /api' + (m[1] || '')];
+              return new Promise(function (ok) { setTimeout(function () {
+                var s = 200, d;
+                try { if (!h) throw E('Not found.', 404); var b = {}; try { b = o.body ? JSON.parse(o.body) : {}; } catch (x) { throw E('Invalid input. Please check the values entered.'); }
+                  var out = h({ body: b, headers: o.headers || {} }); s = out[0]; d = out[1]; save();
+                } catch (e) { s = e.status || 500; d = { error: e.status ? e.message : 'Server error. Please try again.' }; }
+                ok(new Response(JSON.stringify(d), { status: s, headers: { 'Content-Type': 'application/json' } }));
+              }, 100); });
+            };
+            var bar = document.createElement('div');
+            bar.style.cssText = 'background:#eef2ff;color:#3730a3;padding:8px 14px;font:13px system-ui,sans-serif;text-align:center';
+            bar.innerHTML = '<b>Live demo</b> · runs in your browser · Try account <b>1</b> / PIN <b>1234</b> · <a href="#" id="demoReset">Reset demo</a>';
+            document.body.insertBefore(bar, document.body.firstChild);
+            document.getElementById('demoReset').onclick = function (e) { e.preventDefault(); try { localStorage.removeItem(KEY); sessionStorage.clear(); } catch (x) {} location.reload(); };
+          })();
+          EOF
 
       - uses: actions/upload-pages-artifact@v3
         with:
