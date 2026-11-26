@@ -28,10 +28,10 @@ jobs:
           mkdir _site
           cp -r "$(dirname "$INDEX")"/. _site/
           sed -i -E 's#(href|src)="/([^"/][^"]*)"#\1="\2"#g; s#href="/"#href="./"#g' _site/index.html
-          sed -i 's#<script src="app.js"></script>#<script src="demo-api.js"></script><script src="app.js"></script>#' _site/index.html
-          grep -q 'src="demo-api.js"' _site/index.html
+          sed -i 's#<script src="app.js"></script>#<script src="demo.js"></script><script src="app.js"></script>#' _site/index.html
+          grep -q 'src="demo.js"' _site/index.html
           touch _site/.nojekyll
-          cat > _site/demo-api.js <<'EOF'
+          cat > _site/demo.js <<'EOF'
           (function () {
             var KEY = 'bank_demo_db_v2', db;
             function now() { var d = new Date(), p = function (n) { return String(n).padStart(2, '0'); };
