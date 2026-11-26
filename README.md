@@ -1,4 +1,5 @@
-# Bank Account Management & Transaction System — Web App
+# Bank Account Management & Transaction System — Web App ( 
+northstar bank )
 
 Web version of the Core Java + JDBC + MySQL console banking system. Same features, now with a browser UI:
 
